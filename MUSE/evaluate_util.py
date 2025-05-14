@@ -1,5 +1,4 @@
 from tqdm import tqdm
-# from data_module import TextDatasetQA, custom_data_collator, get_batch_loss
 from data_module import TextDatasetNoQASet, custom_data_collator, get_batch_loss
 import torch
 from torch import nn
@@ -15,7 +14,13 @@ import torch.nn as nn
 import copy
 import math
 from get_info import get_components
-# from merge_models import CustomModelForCausalLM
+from merge_models import CustomModelForCausalLM
+
+def safe_to_numpy(tensor):
+    """safely convert tensor (e.g. type BFloat16) to numpy array"""
+    if tensor.dtype == torch.bfloat16:
+        return tensor.float().detach().cpu().numpy()
+    return tensor.detach().cpu().numpy()
 
 def eval_perturbation_ratio(eval_dataloader, perturb_dataloader, model):
     eval_logs = {}
@@ -58,15 +63,14 @@ def eval_perturbation_ratio(eval_dataloader, perturb_dataloader, model):
         # eval_logs['ground_truth_loss'] = eval_logs.get('ground_truth_loss', []) + [gt_loss.mean().item()]
         # eval_logs['perturb_loss'] = eval_logs.get('perturb_loss', []) + [mean_perturb_loss.mean().item()]
 
-        eval_logs['average_perturb_loss'] = eval_logs.get('average_perturb_loss', []) + (perturb_loss/num_token_perturb).tolist()
-        eval_logs['avg_paraphrased_loss'] = eval_logs.get('avg_paraphrased_loss', []) + (gt_loss/num_token_gt).cpu().numpy().tolist()
+        eval_logs['average_perturb_loss'] = eval_logs.get('average_perturb_loss', []) + safe_to_numpy(perturb_loss/num_token_perturb).tolist()
+        eval_logs['avg_paraphrased_loss'] = eval_logs.get('avg_paraphrased_loss', []) + safe_to_numpy(gt_loss/num_token_gt).tolist()
 
-        eval_logs['paraphrased_loss'] = eval_logs.get('paraphrased_loss', []) + gt_loss.tolist()
-        eval_logs['perturb_loss'] = eval_logs.get('perturb_loss', []) + perturb_loss.tolist()
+        eval_logs['paraphrased_loss'] = eval_logs.get('paraphrased_loss', []) + safe_to_numpy(gt_loss).tolist()
+        eval_logs['perturb_loss'] = eval_logs.get('perturb_loss', []) + safe_to_numpy(perturb_loss).tolist()
 
-        eval_logs['num_token_paraphrased'] = eval_logs.get('num_token_paraphrased', []) + num_token_gt.tolist()
-        eval_logs['num_token_perturb'] = eval_logs.get('num_token_perturb', []) + num_token_perturb.tolist()
-
+        eval_logs['num_token_paraphrased'] = eval_logs.get('num_token_paraphrased', []) + safe_to_numpy(num_token_gt).tolist()
+        eval_logs['num_token_perturb'] = eval_logs.get('num_token_perturb', []) + safe_to_numpy(num_token_perturb).tolist()
     return eval_logs
 
 def get_dataloader(cfg, eval_task, tokenizer, folder, split, question_key, answer_key, base_answer_key, perturbed_answer_key):
@@ -111,9 +115,12 @@ def get_all_evals(cfg, model, tokenizer, eval_task, eval_dataloader, pretrained_
         gt_loss = get_batch_loss(outputs.logits, batch['labels'])
         num_token_gt = (batch['labels']!=-100).sum(-1)
 
-        eval_logs['avg_gt_loss'] = eval_logs.get('avg_gt_loss', []) + (gt_loss/num_token_gt).cpu().numpy().tolist()
-        eval_logs['gt_loss'] = eval_logs.get('gt_loss', []) + gt_loss.tolist()
-        eval_logs['num_token_gt'] = eval_logs.get('num_token_gt', []) + num_token_gt.tolist()
+        gt_loss_numpy = safe_to_numpy(gt_loss)
+        num_token_gt_numpy = safe_to_numpy(num_token_gt)
+
+        eval_logs['avg_gt_loss'] = eval_logs.get('avg_gt_loss', []) + (gt_loss_numpy/num_token_gt_numpy).tolist()
+        eval_logs['gt_loss'] = eval_logs.get('gt_loss', []) + gt_loss_numpy.tolist()
+        eval_logs['num_token_gt'] = eval_logs.get('num_token_gt', []) + num_token_gt_numpy.tolist()
 
 
     eval_logs.update(eval_rouge_recall(gen_outputs, ground_truths))
@@ -379,11 +386,11 @@ def contrasting_generation(model, inputs, cfg, left_pad_tokenizer, tokenizer, pr
         ):
     # for k in range (max_token-input_ids.shape[-1]):
         
-        model_inputs=model.prepare_inputs_id(input_ids, logits_processor, stopping_criteria, generation_config, synced_gpus, streamer , **model_kwargs)
+        model_inputs = model.prepare_inputs_for_generation(input_ids, **model_kwargs)
+        
         if pretrained_model is not None:
-            model_inputs_pre=pretrained_model.prepare_inputs_id(input_ids, logits_processor, stopping_criteria, generation_config, synced_gpus, streamer , **model_kwargs1)
-        # print(model_inputs)
-        # logits0 = model(current_input.input_ids, attention_mask=current_input.attention_mask, use_cache=True, output_hidden_states=False, return_dict=True,).logits
+            # model_inputs_pre=prepare_inputs_id(pretrained_model, input_ids, logits_processor, stopping_criteria, generation_config, synced_gpus, streamer , **model_kwargs1)
+            model_inputs_pre = pretrained_model.prepare_inputs_for_generation(input_ids, **model_kwargs1)
 
         outputs0 = model(**model_inputs, return_dict=True)
         logits0 = outputs0.logits[:, -1, :].float()
@@ -422,11 +429,9 @@ def contrasting_generation(model, inputs, cfg, left_pad_tokenizer, tokenizer, pr
                 next_tokens = torch.argmax(next_token_scores, dim=-1)
             else:
                 max_logits0 = torch.max(logits0, dim=-1)[0]
-                # 找到logits0中大于max_logits0的条件下的索引
+                # token filter
                 mask = logits0 > (max_logits0.unsqueeze(-1)-minus_value)
-
-                # 使用掩码在logits中选择对应的最大值
-                logits_masked = logits.masked_fill(~mask, float('-inf'))  # 使用 -inf 填充不符合条件的位置
+                logits_masked = logits.masked_fill(~mask, float('-inf'))  # hide tokens with lower logits (than threshold)
                 next_tokens = torch.argmax(logits_masked, dim=-1).cuda()
         if streamer is not None:
             streamer.put(next_tokens.cpu())
