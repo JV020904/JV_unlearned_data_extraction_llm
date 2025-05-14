@@ -78,7 +78,11 @@ def get_components(
                 and len(inputs_tensor.shape) == 2
                 and torch.sum(inputs_tensor[:, -1] == generation_config._pad_token_tensor) > 0
             ):
-                logger.warning(
+                # logger.warning(
+                #     "A decoder-only architecture is being used, but right-padding was detected! For correct "
+                #     "generation results, please set `padding_side='left'` when initializing the tokenizer."
+                # )
+                print(
                     "A decoder-only architecture is being used, but right-padding was detected! For correct "
                     "generation results, please set `padding_side='left'` when initializing the tokenizer."
                 )
