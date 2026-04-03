@@ -5,12 +5,12 @@ save_dir: ${model_path}
 
 data_path: [MUSE_data_news, MUSE_data_news, MUSE_data_news]
 
-split: forget01
+split: forget10
 
 split_list:
-  - forget01
-  - forget01
-  - forget01
+  - forget10
+  - forget10
+  - forget10
 
 question_key: [question, question, question]
 answer_key: [answer, answer, answer]

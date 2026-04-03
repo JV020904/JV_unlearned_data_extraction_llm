@@ -100,7 +100,7 @@ def main(cfg):
             save_only_model=True,
             ddp_find_unused_parameters= False,
             evaluation_strategy="no",
-            deepspeed='config/ds_config.json',
+            #deepspeed='config/ds_config.json',
             weight_decay = cfg.weight_decay
         )
 

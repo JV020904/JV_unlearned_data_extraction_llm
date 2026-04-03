@@ -4,7 +4,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 # Define the keywords and the directory to search
 key_words = ['rougeL_recall']
-src_directory = '../checkpoint_updated/MUSE'  # Current directory
+#src_directory = '../checkpoint_updated/MUSE'  # Current directory
+src_directory = '/projects/unlearning_models'
 
 threshold_list = [0.9, 0.99, 0.0]
 use_threshold_list = [True, True, False]
@@ -21,7 +22,7 @@ for threshold, use_threshold in zip(threshold_list, use_threshold_list):
         basedirname = os.path.join(src_directory, dirname)
 
         for checkpointname in os.listdir(basedirname):
-            if not checkpointname.startswith('checkpoint-5553'):
+            if not checkpointname.startswith('checkpoint-5553'): #Changed from 5553
                 continue
             directory = os.path.join(basedirname, checkpointname)
             # Traverse all JSON files in the directory
