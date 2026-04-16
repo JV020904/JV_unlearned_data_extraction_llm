@@ -7,11 +7,21 @@ LoRA:
 
 data_path: MUSE_data_news
 split: full
-batch_size: 4 #Changed from 4
-gradient_accumulation_steps: 4
-num_epochs: 2 #Changed from 5
+batch_size: 1 #Changed from 4
+gradient_accumulation_steps: 1
+num_epochs: 3 #Changed from 5
 lr: 1e-5 
 seed: 42
 run_index: 1 #was 1
 save_dir: ../checkpoint_updated/MUSE/final_ft_noLORA_5_epochs_inst_lr${lr}_${model_family}_${split}_seed${seed}_${run_index}
 weight_decay: 0.01
+
+#New: Added by me
+flash_attention2: "false"
+dp:
+  enabled: true
+  noise_multiplier: 1.0
+  max_grad_norm: 1.0
+  delta: 1e-5
+
+

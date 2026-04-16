@@ -2,7 +2,7 @@ from data_module import TextDatasetNoQASet, custom_data_collator
 from dataloader import CustomTrainer
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import hydra 
+import hydra
 import transformers
 import os
 from peft import LoraConfig, get_peft_model
@@ -10,7 +10,14 @@ from pathlib import Path
 from omegaconf import OmegaConf
 from utils import get_model_identifiers_from_yaml, set_random_seed
 from datetime import datetime
+from opacus import PrivacyEngine
+from opacus.validators import ModuleValidator
+from transformers import get_constant_schedule
+from opacus.accountants.utils import get_noise_multiplier
+#Adding this import to help with memory...
+from opacus.utils.batch_memory_manager import BatchMemoryManager
 
+ 
 def find_all_linear_names(model):
     cls = torch.nn.Linear
     lora_module_names = set()
@@ -39,10 +46,10 @@ def print_trainable_parameters(model):
 
 @hydra.main(version_base=None, config_path="config", config_name="finetune")
 def main(cfg):
-
+    #privacy_engine = None #Added to initialize privacy engine within the scope of the training call
     seed = cfg.seed
     set_random_seed(seed)
-    
+
     if os.environ.get('LOCAL_RANK') is not None:
         local_rank = int(os.environ.get('LOCAL_RANK', '0'))
         device_map = {'': local_rank}
@@ -52,7 +59,7 @@ def main(cfg):
     model_id = model_cfg["hf_key"]
 
     Path(cfg.save_dir).mkdir(parents=True, exist_ok=True) # save the cfg file
-    
+
     #if master process
     if os.environ.get('LOCAL_RANK') is None or local_rank == 0:
         with open(f'{cfg.save_dir}/cfg.yaml', 'w') as f:
@@ -65,7 +72,7 @@ def main(cfg):
     torch_format_dataset = TextDatasetNoQASet(cfg.data_path, tokenizer=tokenizer, model_family = cfg.model_family, max_length=max_length, split=cfg.split)
 
     batch_size = cfg.batch_size
-    gradient_accumulation_steps = cfg.gradient_accumulation_steps 
+    gradient_accumulation_steps = cfg.gradient_accumulation_steps
 
     # --nproc_per_node gives the number of GPUs per = num_devices. take it from torchrun/os.environ
     num_devices = int(os.environ.get('WORLD_SIZE', 1))
@@ -88,13 +95,17 @@ def main(cfg):
             # warmup_steps=max(1, max_steps//10),
             max_steps=max_steps,
             learning_rate=cfg.lr,
-            bf16=True,
-            bf16_full_eval=True,
+            bf16=False, #Changed from true
+            bf16_full_eval=False, #Changed from true
+            fp16=False,
             lr_scheduler_type="constant",
             logging_steps=max(1,max_steps//20),
             logging_dir=f'{cfg.save_dir}/logs',
             output_dir=cfg.save_dir,
-            optim="paged_adamw_32bit",
+            #optim="paged_adamw_32bit", #Commented out for DP
+            #Why change to below: Opacus' DP wrapper is designed around standard
+            #torch.optim.Optimizer workflows
+            optim="adamw_torch",
             save_steps=steps_per_epoch//5,
             # save_steps=save_steps,
             save_only_model=True,
@@ -104,26 +115,44 @@ def main(cfg):
             weight_decay = cfg.weight_decay
         )
 
-    model = AutoModelForCausalLM.from_pretrained(model_id, 
-                                                 use_flash_attention_2=model_cfg["flash_attention2"]=="true", 
-                                                 torch_dtype=torch.bfloat16, 
+    model = AutoModelForCausalLM.from_pretrained(model_id,
+                                                 #use_flash_attention_2=model_cfg["flash_attention2"]=="true",
+                                                 use_flash_attention_2=False,
+                                                 torch_dtype=torch.float32,
                                                  trust_remote_code = True)
     model.generation_config.do_sample = True
-    
-    if model_cfg["gradient_checkpointing"] == "true": 
+
+    if model_cfg["gradient_checkpointing"] == "true":
         model.gradient_checkpointing_enable()
-    
+
     config = LoraConfig(
-        r=cfg.LoRA.r, 
-        lora_alpha=cfg.LoRA.alpha, 
-        target_modules=find_all_linear_names(model), 
+        r=cfg.LoRA.r,
+        lora_alpha=cfg.LoRA.alpha,
+        target_modules=find_all_linear_names(model),
         lora_dropout=cfg.LoRA.dropout,
-        bias="none", 
+        bias="none",
         task_type="CAUSAL_LM"
     )
     if cfg.LoRA.r != 0:
         model = get_peft_model(model, config)
-    
+
+    #Added: Hugging face loads pretrained models in eval mode by default
+    model.train()
+
+    model = ModuleValidator.fix(model)
+    #Added: fix() may return a replacement module, so we have to put it in train again
+    model.train()
+    ModuleValidator.validate(model, strict=True)
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(
+        trainable_params,
+        lr=cfg.lr,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=cfg.weight_decay,
+    )
+    scheduler = get_constant_schedule(optimizer)
 
     trainer = CustomTrainer(
         model=model,
@@ -132,11 +161,40 @@ def main(cfg):
         args=training_args,
         data_collator=custom_data_collator,
     )
-    model.config.use_cache = False  # silence the warnings. Please re-enable for inference!
+    #Moved here to fix error
+    model.config.use_cache = False #silence the warnings. Re-enable for inference
+    #Privacy engine: enables differential privacy for training PyTorch models with minimal code changes
+    #Initialize optimizer + scheduler FIRST
+    train_dataloader = trainer.get_train_dataloader()
+    privacy_engine = PrivacyEngine(accountant="prv")
+    #TThis part below is for actually applying DP
+    model, optimizer, train_dataloader = privacy_engine.make_private(
+        module=model,
+        optimizer=optimizer,
+        data_loader=train_dataloader,
+        noise_multiplier=cfg.dp.noise_multiplier,
+        max_grad_norm=cfg.dp.max_grad_norm,
+    )
+    #Override the Trainer's dataloader
+    trainer.model = model
+    trainer.optimizer = optimizer
+    trainer.lr_scheduler = scheduler
+    trainer.get_train_dataloader = lambda: train_dataloader
 
     print(f'Start training: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}.')
-    trainer.train()
+
+    with BatchMemoryManager(
+        data_loader=train_dataloader,
+        max_physical_batch_size=1,
+        optimizer=optimizer
+    ) as memory_safe_data_loader:
+        trainer.get_train_dataloader = lambda: memory_safe_data_loader
+        trainer.train()
+
     print(f'Finish training: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}.')
+    #Added to keep track of epsilon
+    epsilon = privacy_engine.get_epsilon(delta=cfg.dp.delta)
+    print(f"DP epsilon: {epsilon}")
 
     #save the model
     if cfg.LoRA.r != 0:
