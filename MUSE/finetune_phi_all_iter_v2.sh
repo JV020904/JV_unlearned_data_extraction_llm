@@ -1,11 +1,12 @@
+#Command for running this script: bash finetune_phi_all_iter_v2.sh
 master_port=18761
 model=phi
 lr=1e-5
-batch_size=1
-gradient_accumulation_steps=1
+batch_size=4 #Batch size can be lowered if memory issues are encountered.
+gradient_accumulation_steps=4
 
 splits=("full" "full_minus_forget10")
-
+#Note: Torch needs to be installed within conda env for running this script
 
 for split in "${splits[@]}"; do
     echo "Processing split: $split"

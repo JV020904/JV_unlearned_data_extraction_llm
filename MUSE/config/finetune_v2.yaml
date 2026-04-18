@@ -1,3 +1,5 @@
+#If needed, the batch size, epochs, and run_index variables can be changed
+#****^^^If memory errors arise^^^****
 model_family: llama2-7b
 
 LoRA:
@@ -7,9 +9,9 @@ LoRA:
 
 data_path: MUSE_data_news
 split: full
-batch_size: 1 #Changed from 4
+batch_size: 4 #Changed from 4
 gradient_accumulation_steps: 1
-num_epochs: 3 #Changed from 5
+num_epochs: 5 #Changed from 5
 lr: 1e-5 
 seed: 42
 run_index: 1 #was 1

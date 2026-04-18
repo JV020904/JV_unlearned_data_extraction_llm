@@ -85,13 +85,13 @@ class CustomTrainerForgetting(Trainer):
     #         "pin_memory": self.args.dataloader_pin_memory,
     #         "persistent_workers": self.args.dataloader_persistent_workers,
     #     }
-        
+
     #     generator = torch.Generator()
     #     generator.manual_seed(self.seed + self.state.global_step)
     #     print(f'Generator........Epoch-{self.state.global_step}')
 
     #     if not isinstance(train_dataset, torch.utils.data.IterableDataset):
-            
+
     #         dataloader_params["generator"] = generator
     #         dataloader_params["shuffle"] = True # set shuffle=True with specified generator.
     #         # dataloader_params["sampler"] = self._get_train_sampler()
@@ -554,6 +554,7 @@ class CustomTrainerRetraining(Trainer):
         super(CustomTrainerRetraining, self).__init__(*args, **kwargs)
 
     def get_train_dataloader(self):
+        dataloader_params["drop_last"] = True
         if self.train_dataset is None:
             raise ValueError("Trainer: training requires a train_dataset.")
 
@@ -571,7 +572,7 @@ class CustomTrainerRetraining(Trainer):
             "pin_memory": self.args.dataloader_pin_memory,
             "persistent_workers": self.args.dataloader_persistent_workers,
         }
-        
+
         generator = torch.Generator()
         generator.manual_seed(self.seed + self.state.global_step)
         print(f'Generator........Epoch-{self.state.global_step}')
@@ -582,8 +583,9 @@ class CustomTrainerRetraining(Trainer):
             # dataloader_params["sampler"] = self._get_train_sampler()
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
             dataloader_params["worker_init_fn"] = seed_worker
-        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
-
+        #return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+        #Changed to this line below since Opacus wraps the dataloader itself
+        return DataLoader(train_dataset, **dataloader_params)
     def compute_loss(self, model, inputs, return_outputs=False):
         input_ids, labels, attention_mask = inputs
         outputs = model(input_ids,labels=labels, attention_mask=attention_mask)

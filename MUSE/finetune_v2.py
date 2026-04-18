@@ -68,7 +68,7 @@ def main(cfg):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    max_length = 500
+    max_length = 500 #Reduced from 500
     torch_format_dataset = TextDatasetNoQASet(cfg.data_path, tokenizer=tokenizer, model_family = cfg.model_family, max_length=max_length, split=cfg.split)
 
     batch_size = cfg.batch_size
