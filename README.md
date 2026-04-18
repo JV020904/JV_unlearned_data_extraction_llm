@@ -3,6 +3,10 @@
 > Xiaoyu Wu, Yifei Pang, Terrance Liu, Zhiwei Steven Wu    
 > *NeurIPS 2025 ([arXiv 2505.24379](https://arxiv.org/pdf/2505.24379))*  
 
+Edit note by José V: The steps to run the experiment have not changed, just some of the code in order to attempt to frame this experiment in a differential privacy framework. The only important things I want to highlight are as follows:
+          *If memory errors are encountered when attempting to run the script( bash                               finetune_phi_all_iter), it is okay to decrease the batch size in both the                        finetune_phi_all_iter.sh file and the finetune_v2.yaml config file(in the                        config/ directory).
+          *flash-attn is not ESSENTIAL, but it does speed up the training process.
+          
 This repository provides the implementation of our algorithm for extracting unlearned data from large language models (LLMs) using guidance-based methods. The code is built primarily upon the [TOFU repository](https://github.com/locuslab/tofu) and includes data from [MUSE](https://muse-bench.github.io).
 
 The core implementation can be found in `MUSE/evaluate_util.py`, particularly the `contrasting_generation` function.
